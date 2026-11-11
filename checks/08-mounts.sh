@@ -21,15 +21,19 @@ run_check() {
         echo; echo "## Đơn vị mount systemd bị lỗi"
         failed_mounts="$(systemctl --failed --no-legend --type=mount 2>/dev/null | wc -l)"
         systemctl --failed --no-pager --type=mount 2>/dev/null || true
-        echo; echo "## Container Docker có bind mount nằm ngoài / (ổ đĩa ngoài)"
+        echo; echo "## Container Docker có bind mount nằm trên phân vùng riêng (không phải /)"
         if command -v docker >/dev/null 2>&1 && docker info >/dev/null 2>&1; then
-            docker ps -a --format '{{.Names}}' | while read -r c; do
-                docker inspect -f '{{.Name}}: {{range .Mounts}}{{if eq .Type "bind"}}{{.Source}} {{end}}{{end}}' "$c" 2>/dev/null
-            done | grep -E ': .*/(media|mnt|srv|data|run/media)/' || echo "không có"
+            docker ps -a -q | xargs -r docker inspect -f '{{.Name}}{{range .Mounts}}{{if eq .Type "bind"}} {{.Source}}{{end}}{{end}}' \
+            | while read -r cname srcs; do
+                for src in $srcs; do
+                    tgt="$(findmnt -T "$src" -no TARGET 2>/dev/null)"
+                    [[ -n "$tgt" && "$tgt" != "/" ]] && echo "$cname: $src (nằm trên mount $tgt)"
+                done
+            done | sort -u
         else echo "docker không chạy hoặc chưa cài"; fi
     } > "$log" 2>&1
 
-    docker_binds="$(sed -n '/Container Docker/,$p' "$log" | grep -c ': ' || true)"
+    docker_binds="$(grep -c 'nằm trên mount' "$log" || true)"
     if (( risky > 0 )) || (( failed_mounts > 0 )); then
         record mounts FAIL "$risky mục fstab không có nofail, $failed_mounts mount lỗi; có thể treo khi khởi động"
     elif (( docker_binds > 0 )); then
